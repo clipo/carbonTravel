@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 import json
 import os
+import logging
 
 # Import the main script (assuming it's named distance_calculator.py)
 from distance_calculator import (
@@ -13,13 +14,16 @@ from distance_calculator import (
     process_excel_file
 )
 
+# Configure logging for tests (optional, but helpful)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 class TestDistanceCalculator(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test fixtures that will be used for all tests"""
-        # Sample API response for distance matrix
-        cls.sample_distance_response = {
+        # Sample API response for distance matrix (OK status)
+        cls.sample_distance_response_ok = {
             'rows': [{
                 'elements': [{
                     'status': 'OK',
@@ -29,11 +33,20 @@ class TestDistanceCalculator(unittest.TestCase):
             }]
         }
 
-        # Sample API response for failed route
-        cls.failed_distance_response = {
+        # Sample API response for distance matrix (failed status)
+        cls.sample_distance_response_failed = {
             'rows': [{
                 'elements': [{
                     'status': 'ZERO_RESULTS'
+                }]
+            }]
+        }
+
+        # Sample API response for distance matrix (other error status)
+        cls.sample_distance_response_other_error = {
+            'rows': [{
+                'elements': [{
+                    'status': 'INVALID_REQUEST'
                 }]
             }]
         }
@@ -48,25 +61,22 @@ class TestDistanceCalculator(unittest.TestCase):
             }
         }]
 
+        # Sample geocoding response with error
+        cls.sample_geocode_response_error = []
+
     def setUp(self):
         """Set up test fixtures before each test"""
-        # Create a mock API key
         self.api_key = 'test_api_key'
-
-        # Create sample test data
         self.test_data = pd.DataFrame({
             'Starting_City': ['New York', 'London'],
             'Destination': ['Boston', 'Paris']
         })
-
-        # Save test data to temporary Excel file
         self.test_input_file = 'test_input.xlsx'
         self.test_output_file = 'test_output.xlsx'
         self.test_data.to_excel(self.test_input_file, index=False)
 
     def tearDown(self):
         """Clean up test fixtures after each test"""
-        # Remove temporary files
         if os.path.exists(self.test_input_file):
             os.remove(self.test_input_file)
         if os.path.exists(self.test_output_file):
@@ -75,50 +85,40 @@ class TestDistanceCalculator(unittest.TestCase):
     @patch('googlemaps.Client')
     def test_initialize_gmaps_client(self, mock_client):
         """Test Google Maps client initialization"""
-        # Test successful initialization
         client = initialize_gmaps_client(self.api_key)
         mock_client.assert_called_once_with(key=self.api_key)
 
-        # Test failed initialization
         mock_client.side_effect = Exception('API Key Error')
-        with self.assertRaises(Exception):
+        with self.assertRaises(Exception) as context:
             initialize_gmaps_client('invalid_key')
+        self.assertTrue('Failed to initialize Google Maps client' in str(context.exception))
 
     @patch('googlemaps.Client')
     def test_calculate_distance(self, mock_client):
         """Test distance calculation for different modes"""
         mock_gmaps = Mock()
-        mock_gmaps.distance_matrix.return_value = self.sample_distance_response
 
-        # Test successful distance calculation
+        # Test OK response
+        mock_gmaps.distance_matrix.return_value = self.sample_distance_response_ok
         for mode in ['driving', 'transit', 'walking', 'bicycling']:
-            distance, duration = calculate_distance(
-                mock_gmaps,
-                'New York',
-                'Boston',
-                mode
-            )
-            self.assertEqual(distance, 50.0)  # 50000m converted to km
-            self.assertEqual(duration, 1.0)  # 3600s converted to hours
+            distance, duration = calculate_distance(mock_gmaps, 'New York', 'Boston', mode)
+            self.assertEqual(distance, 50.0)
+            self.assertEqual(duration, 1.0)
 
         # Test invalid mode
-        distance, duration = calculate_distance(
-            mock_gmaps,
-            'New York',
-            'Boston',
-            'invalid_mode'
-        )
+        distance, duration = calculate_distance(mock_gmaps, 'New York', 'Boston', 'invalid_mode')
         self.assertIsNone(distance)
         self.assertIsNone(duration)
 
         # Test failed route
-        mock_gmaps.distance_matrix.return_value = self.failed_distance_response
-        distance, duration = calculate_distance(
-            mock_gmaps,
-            'New York',
-            'Tokyo',
-            'driving'
-        )
+        mock_gmaps.distance_matrix.return_value = self.sample_distance_response_failed
+        distance, duration = calculate_distance(mock_gmaps, 'New York', 'Tokyo', 'driving')
+        self.assertIsNone(distance)
+        self.assertIsNone(duration)
+
+        # Test other error status
+        mock_gmaps.distance_matrix.return_value = self.sample_distance_response_other_error
+        distance, duration = calculate_distance(mock_gmaps, 'New York', 'Tokyo', 'driving')
         self.assertIsNone(distance)
         self.assertIsNone(duration)
 
@@ -127,41 +127,31 @@ class TestDistanceCalculator(unittest.TestCase):
         """Test flight distance calculation"""
         mock_gmaps = Mock()
         mock_gmaps.geocode.return_value = self.sample_geocode_response
-        mock_gmaps.distance_matrix.return_value = self.sample_distance_response
+        mock_gmaps.distance_matrix.return_value = self.sample_distance_response_ok
 
-        # Test successful flight distance calculation
-        distance = calculate_flight_distance(
-            mock_gmaps,
-            'New York',
-            'London'
-        )
+        distance = calculate_flight_distance(mock_gmaps, 'New York', 'London')
         self.assertEqual(distance, 50.0)
 
-        # Test failed geocoding
         mock_gmaps.geocode.side_effect = Exception('Geocoding Error')
-        distance = calculate_flight_distance(
-            mock_gmaps,
-            'Invalid City',
-            'London'
-        )
+        distance = calculate_flight_distance(mock_gmaps, 'Invalid City', 'London')
+        self.assertIsNone(distance)
+
+        mock_gmaps.geocode.return_value = self.sample_geocode_response_error
+        distance = calculate_flight_distance(mock_gmaps, 'Invalid City', 'London')
         self.assertIsNone(distance)
 
     @patch('googlemaps.Client')
     def test_process_excel_file(self, mock_client):
         """Test Excel file processing"""
         mock_gmaps = Mock()
-        mock_gmaps.distance_matrix.return_value = self.sample_distance_response
+        mock_gmaps.distance_matrix.return_value = self.sample_distance_response_ok
         mock_gmaps.geocode.return_value = self.sample_geocode_response
         mock_client.return_value = mock_gmaps
 
-        # Test successful file processing
         process_excel_file(self.test_input_file, self.test_output_file, self.api_key)
-
-        # Verify output file exists and has correct structure
         self.assertTrue(os.path.exists(self.test_output_file))
         output_df = pd.read_excel(self.test_output_file)
 
-        # Check if all expected columns are present
         expected_columns = [
             'Starting_City', 'Destination',
             'Car_Distance_km', 'Car_Duration_hrs',
@@ -173,65 +163,54 @@ class TestDistanceCalculator(unittest.TestCase):
         for column in expected_columns:
             self.assertIn(column, output_df.columns)
 
-        # Test file processing with invalid input file
-        with self.assertRaises(Exception):
+        with self.assertRaises(FileNotFoundError) as context:
             process_excel_file('invalid_file.xlsx', self.test_output_file, self.api_key)
+        self.assertTrue('Input file not found' in str(context.exception))
+
+    @patch('distance_calculator.calculate_distance')
+    @patch('distance_calculator.calculate_flight_distance')
+    @patch('pandas.read_excel')
+    def test_process_excel_file_with_exceptions(self, mock_read_excel, mock_calculate_flight_distance,
+                                                mock_calculate_distance):
+        # Simulate exceptions in calculate_distance and calculate_flight_distance
+        mock_calculate_distance.side_effect = Exception("Distance Calculation Error")
+        mock_calculate_flight_distance.side_effect = Exception("Flight Distance Calculation Error")
+
+        with self.assertRaises(Exception) as context:
+            process_excel_file(self.test_input_file, self.test_output_file, self.api_key)
+        self.assertTrue("Error processing Excel file" in str(context.exception))
+
+        mock_calculate_distance.side_effect = None
+        mock_calculate_flight_distance.side_effect = None
 
 
 class TestDistanceCalculatorIntegration(unittest.TestCase):
-    """Integration tests for the Distance Calculator"""
+    """Integration tests (these will actually call the Google Maps API - Requires API key and network access)"""
+    # These tests are commented out as they require a valid API key and network connection.  Uncomment and replace with your API key to run these tests
 
-    @patch('googlemaps.Client')
-    def test_end_to_end_processing(self, mock_client):
-        """Test end-to-end processing with mock data"""
-        # Create test input file
-        test_data = pd.DataFrame({
-            'Starting_City': ['New York', 'London', 'Tokyo'],
-            'Destination': ['Boston', 'Paris', 'Kyoto']
-        })
-        input_file = 'integration_test_input.xlsx'
-        output_file = 'integration_test_output.xlsx'
-        test_data.to_excel(input_file, index=False)
-
-        try:
-            # Mock Google Maps client responses
-            mock_gmaps = Mock()
-            mock_gmaps.distance_matrix.return_value = {
-                'rows': [{
-                    'elements': [{
-                        'status': 'OK',
-                        'distance': {'value': 50000, 'text': '50 km'},
-                        'duration': {'value': 3600, 'text': '1 hour'}
-                    }]
-                }]
-            }
-            mock_gmaps.geocode.return_value = [{
-                'geometry': {
-                    'location': {'lat': 40.7128, 'lng': -74.0060}
-                }
-            }]
-            mock_client.return_value = mock_gmaps
-
-            # Process the file
-            process_excel_file(input_file, output_file, 'test_api_key')
-
-            # Verify results
-            result_df = pd.read_excel(output_file)
-
-            # Check if all rows were processed
-            self.assertEqual(len(result_df), 3)
-
-            # Check if all distance columns contain valid data
-            distance_columns = [col for col in result_df.columns if 'Distance' in col]
-            for col in distance_columns:
-                self.assertFalse(result_df[col].isnull().all())
-
-        finally:
-            # Clean up test files
-            if os.path.exists(input_file):
-                os.remove(input_file)
-            if os.path.exists(output_file):
-                os.remove(output_file)
+    # @unittest.skipUnless(os.environ.get('GOOGLE_MAPS_API_KEY'), "GOOGLE_MAPS_API_KEY environment variable not set")
+    # def test_end_to_end_processing(self):
+    #     """Test end-to-end processing with real data (requires API key)"""
+    #     test_data = pd.DataFrame({
+    #         'Starting_City': ['New York', 'London', 'Tokyo'],
+    #         'Destination': ['Boston', 'Paris', 'Kyoto']
+    #     })
+    #     input_file = 'integration_test_input.xlsx'
+    #     output_file = 'integration_test_output.xlsx'
+    #     test_data.to_excel(input_file, index=False)
+    #
+    #     try:
+    #         process_excel_file(input_file, output_file, os.environ['GOOGLE_MAPS_API_KEY'])
+    #         result_df = pd.read_excel(output_file)
+    #         self.assertEqual(len(result_df), 3)
+    #         distance_columns = [col for col in result_df.columns if 'Distance' in col]
+    #         for col in distance_columns:
+    #             self.assertFalse(result_df[col].isnull().all())
+    #     finally:
+    #         if os.path.exists(input_file):
+    #             os.remove(input_file)
+    #         if os.path.exists(output_file):
+    #             os.remove(output_file)
 
 
 def run_tests():

@@ -3,77 +3,115 @@ import googlemaps
 from datetime import datetime
 import time
 import logging
+import os
+from googlemaps.exceptions import ApiError
+from tqdm import tqdm # Added for progress bar
 
-# Configure logging for better error handling
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def initialize_gmaps_client(api_key):
-    """Initializes the Google Maps client."""
+    """
+    Initialize the Google Maps client with the provided API key.  Includes validation.
+    """
+    if not api_key:
+        raise ValueError("Google Maps API key is missing.")
     try:
         return googlemaps.Client(key=api_key)
     except Exception as e:
-        logging.error(f"Failed to initialize Google Maps client: {e}")
-        raise  # Re-raise the exception to be handled higher up
+        raise Exception(f"Failed to initialize Google Maps client: {str(e)}")
 
-def calculate_distance(gmaps, origin, destination, mode):
-    """Calculates distance and duration between two points."""
-    try:
-        valid_modes = ['driving', 'transit', 'walking', 'bicycling']
-        if mode not in valid_modes:
-            logging.warning(f"Invalid travel mode: {mode}. Skipping.")
+def calculate_distance(gmaps, origin, destination, mode, max_retries=3, retry_delay=2):
+    """
+    Calculate distance between two points using specified mode of transportation.
+    Includes retry mechanism for API errors.
+    Returns distance in kilometers and duration in hours.
+    """
+    retries = 0
+    while retries < max_retries:
+        try:
+            result = gmaps.distance_matrix(
+                origin,
+                destination,
+                mode=mode,
+                departure_time=datetime.now()
+            )
+
+            if result['rows'][0]['elements'][0]['status'] == 'OK':
+                distance = result['rows'][0]['elements'][0]['distance']['value'] / 1000  # Convert to km
+                duration = result['rows'][0]['elements'][0]['duration']['value'] / 3600  # Convert to hours
+                return round(distance, 2), round(duration, 2)
+            else:
+                status = result['rows'][0]['elements'][0]['status']
+                logging.warning(f"Distance Matrix API returned status {status} for {origin} to {destination} using {mode}. Retrying...")
+                time.sleep(retry_delay)
+                retries +=1
+
+        except ApiError as e:
+            logging.error(f"API Error calculating {mode} distance from {origin} to {destination}: {str(e)}. Retrying...")
+            time.sleep(retry_delay)
+            retries += 1
+        except Exception as e:
+            logging.exception(f"Error calculating {mode} distance from {origin} to {destination}: {str(e)}")
             return None, None
+    logging.error(f"Max retries exceeded for {origin} to {destination} using {mode}")
+    return None, None
 
-        result = gmaps.distance_matrix(origin, destination, mode=mode, departure_time=datetime.now())
 
-        element = result['rows'][0]['elements'][0]
-        if element['status'] == 'OK':
-            distance = element['distance']['value'] / 1000
-            duration = element['duration']['value'] / 3600
-            return round(distance, 2), round(duration, 2)
-        else:
-            logging.warning(f"Distance Matrix API returned status: {element['status']} for {origin} to {destination} ({mode}).")
-            return None, None
 
-    except Exception as e:
-        logging.error(f"Error calculating {mode} distance from {origin} to {destination}: {e}")
-        return None, None
+def calculate_flight_distance(gmaps, origin, destination, max_retries=3, retry_delay=2):
+    """
+    Calculate approximate flight distance using Google Maps geocoding and geometry.
+    Includes retry mechanism for API errors.
+    Returns distance in kilometers.
+    """
+    retries = 0
+    while retries < max_retries:
+        try:
+            origin_geocode = gmaps.geocode(origin)[0]['geometry']['location']
+            dest_geocode = gmaps.geocode(destination)[0]['geometry']['location']
 
-def calculate_flight_distance(gmaps, origin, destination):
-    """Calculates approximate flight distance using geocoding and distance matrix."""
-    try:
-        origin_geocode = gmaps.geocode(origin)
-        dest_geocode = gmaps.geocode(destination)
+            result = gmaps.distance_matrix(
+                f"{origin_geocode['lat']},{origin_geocode['lng']}",
+                f"{dest_geocode['lat']},{dest_geocode['lng']}",
+                mode="driving",  # Using driving mode for straight-line distance
+                units="metric"
+            )
 
-        if not origin_geocode or not dest_geocode:
-            logging.warning(f"Geocoding failed for {origin} or {destination}.")
+            if result['rows'][0]['elements'][0]['status'] == 'OK':
+                distance = result['rows'][0]['elements'][0]['distance']['value'] / 1000
+                return round(distance, 2)
+            else:
+                status = result['rows'][0]['elements'][0]['status']
+                logging.warning(f"Distance Matrix API returned status {status} for {origin} to {destination} (flight). Retrying...")
+                time.sleep(retry_delay)
+                retries +=1
+        except (IndexError, KeyError) as e:
+            logging.error(f"Geocoding or distance matrix error for {origin} or {destination} (flight): {e}. Retrying...")
+            time.sleep(retry_delay)
+            retries += 1
+        except ApiError as e:
+            logging.error(f"API Error calculating flight distance from {origin} to {destination}: {str(e)}. Retrying...")
+            time.sleep(retry_delay)
+            retries += 1
+        except Exception as e:
+            logging.exception(f"Error calculating flight distance from {origin} to {destination}: {str(e)}")
             return None
+    logging.error(f"Max retries exceeded for flight distance calculation from {origin} to {destination}")
+    return None
 
-        origin_coords = origin_geocode[0]['geometry']['location']
-        dest_coords = dest_geocode[0]['geometry']['location']
-
-        result = gmaps.distance_matrix(
-            f"{origin_coords['lat']},{origin_coords['lng']}",
-            f"{dest_coords['lat']},{dest_coords['lng']}",
-            mode="driving", units="metric"
-        )
-
-        element = result['rows'][0]['elements'][0]
-        if element['status'] == 'OK':
-            distance = element['distance']['value'] / 1000
-            return round(distance, 2)
-        else:
-            logging.warning(f"Distance Matrix API returned status: {element['status']} for flight distance between {origin} and {destination}.")
-            return None
-
-    except Exception as e:
-        logging.error(f"Error calculating flight distance from {origin} to {destination}: {e}")
-        return None
 
 def process_excel_file(input_file, output_file, api_key):
-    """Processes the input Excel file and generates output with distances."""
+    """
+    Process the input Excel file and generate output with distances.
+    Includes progress bar and improved error handling.
+    """
     try:
         gmaps = initialize_gmaps_client(api_key)
         df = pd.read_excel(input_file)
+        required_cols = ['Starting_City', 'Destination']
+        if not all(col in df.columns for col in required_cols):
+            raise ValueError(f"Input file must contain columns: {required_cols}")
 
         transport_modes = {
             'driving': 'Car',
@@ -85,37 +123,49 @@ def process_excel_file(input_file, output_file, api_key):
         for mode in transport_modes.values():
             df[f'{mode}_Distance_km'] = None
             df[f'{mode}_Duration_hrs'] = None
+
         df['Flight_Distance_km'] = None
 
-        #More efficient iteration using apply
-        def calculate_row_distances(row):
+        for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing rows"):
             origin = row['Starting_City']
             destination = row['Destination']
+
             for api_mode, column_prefix in transport_modes.items():
                 distance, duration = calculate_distance(gmaps, origin, destination, api_mode)
-                row[f'{column_prefix}_Distance_km'] = distance
-                row[f'{column_prefix}_Duration_hrs'] = duration
+                df.at[index, f'{column_prefix}_Distance_km'] = distance
+                df.at[index, f'{column_prefix}_Duration_hrs'] = duration
+
             flight_distance = calculate_flight_distance(gmaps, origin, destination)
-            row['Flight_Distance_km'] = flight_distance
-            return row
+            df.at[index, 'Flight_Distance_km'] = flight_distance
 
-        df = df.apply(calculate_row_distances, axis=1) #apply function row-wise
-
+            print(f"Processed row {index + 1}/{len(df)}: {origin} to {destination}")
 
         df.to_excel(output_file, index=False)
-        logging.info(f"Results saved to {output_file}")
+        print(f"Results saved to {output_file}")
 
+    except FileNotFoundError:
+        logging.error(f"Input file not found: {input_file}")
+        raise
     except Exception as e:
-        logging.exception(f"Error processing Excel file: {e}") #Logs the full traceback
+        logging.exception(f"Error processing Excel file: {str(e)}")
+        raise
 
 
 def main():
-    #Configuration.  Consider using a config file or environment variables for better security
-    API_KEY = 'API KEY GOES HERE'
+    """Main function to run the distance calculation."""
+    API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY')
+    if not API_KEY:
+        logging.error("GOOGLE_MAPS_API_KEY environment variable not set.")
+        return
+
     INPUT_FILE = 'input_locations.xlsx'
     OUTPUT_FILE = 'distances_output.xlsx'
 
-    process_excel_file(INPUT_FILE, OUTPUT_FILE, API_KEY)
+    try:
+        process_excel_file(INPUT_FILE, OUTPUT_FILE, API_KEY)
+    except Exception as e:
+        logging.exception(f"An unexpected error occurred: {e}")
+
 
 if __name__ == "__main__":
     main()
