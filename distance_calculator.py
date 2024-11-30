@@ -104,7 +104,7 @@ def calculate_flight_distance(gmaps, origin, destination, max_retries=3, retry_d
 def process_excel_file(input_file, output_file, api_key):
     """
     Process the input Excel file and generate output with distances.
-    Includes progress bar and improved error handling.
+    Includes progress bar and improved error handling.  Uses Binghamton, NY as default origin if Starting_City is blank.
     """
     try:
         gmaps = initialize_gmaps_client(api_key)
@@ -129,6 +129,10 @@ def process_excel_file(input_file, output_file, api_key):
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing rows"):
             origin = row['Starting_City']
             destination = row['Destination']
+
+            # Check for empty or NaN origin and use Binghamton as default
+            if pd.isna(origin) or origin.strip() == "":
+                origin = "Binghamton, NY"
 
             for api_mode, column_prefix in transport_modes.items():
                 distance, duration = calculate_distance(gmaps, origin, destination, api_mode)
