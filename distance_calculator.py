@@ -6,6 +6,7 @@ import logging
 import os
 from googlemaps.exceptions import ApiError
 from tqdm import tqdm
+import argparse #Import argparse for command-line arguments
 from geopy.distance import geodesic #Import geodesic function
 from geopy.geocoders import Nominatim #Import Nominatim for geocoding
 
@@ -196,18 +197,22 @@ def process_excel_file(input_file, api_key):
 
 def main():
     """Main function to run the distance calculation."""
-    API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY')
+    parser = argparse.ArgumentParser(description="Calculate distances between locations.")
+    parser.add_argument("--api_key", help="Your Google Maps API key")
+    parser.add_argument("-i", "--input_file", default='input_locations.xlsx', help="Input Excel file (default: input_locations.xlsx)")
+    args = parser.parse_args()
+
+    API_KEY = args.api_key
+    INPUT_FILE = args.input_file
+
     if not API_KEY:
         logging.error("GOOGLE_MAPS_API_KEY environment variable not set.")
         return
-
-    INPUT_FILE = 'input_locations.xlsx'  # Replace with your input file name
 
     try:
         process_excel_file(INPUT_FILE, API_KEY)
     except Exception as e:
         logging.exception(f"An unexpected error occurred: {e}")
-
 
 if __name__ == "__main__":
     main()

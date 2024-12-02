@@ -1,18 +1,18 @@
 # Google Maps Distance Calculator
 
-This Python script efficiently calculates distances and travel times between pairs of cities using the Google Maps Distance Matrix API. It supports various transportation modes (driving, transit, walking, bicycling) and provides an approximate flight distance. Results are neatly organized and saved to an Excel file. The project includes a comprehensive unit test suite for enhanced reliability.
+This Python script efficiently calculates distances and travel times between pairs of cities. It uses the Google Maps Distance Matrix API for most calculations and leverages the `geopy` library for flight distance estimations. The script supports various transportation modes (driving, transit, walking, bicycling, flight), handles inconsistent data formats, and includes robust error handling. Results are directly written to the input Excel file.
 
 ## Features:
 
 * **Multi-Modal Distance Calculation:** Computes distances and durations for driving, transit, walking, and bicycling.
-* **Approximate Flight Distance:** Estimates the straight-line (great-circle) distance between locations.
-* **Excel Input/Output:** Reads city pairs from an Excel file and writes results to another Excel file.
-* **Robust Error Handling:** Includes comprehensive error handling and retry mechanisms for API requests and file operations.
+* **Approximate Flight Distance:** Estimates the straight-line (great-circle) distance between locations using the `geopy` library.  Prioritizes flight distance if multiple travel methods are specified.
+* **Excel Input/Output:** Reads city pairs from an Excel file and directly updates the file with calculated distances.
+* **Robust Error Handling:** Includes comprehensive error handling and retry mechanisms for API requests and file operations, including fallback locations for distance calculation failures.
 * **Progress Indication:** Displays a progress bar during processing for larger datasets.
 * **Secure API Key Management:** Uses environment variables for secure storage of the Google Maps API key.
 * **Detailed Logging:** Provides informative logging for debugging and monitoring.
-* **Comprehensive Unit Testing:** A robust unit test suite ensures code quality and reliability.
-* **Default Origin:**  The script now defaults to Binghamton, NY as the starting location if the 'Starting_City' field in the input Excel file is blank or missing.
+* **Command-Line Arguments:** Accepts an optional input file name via the command line.
+* **Default Origin:** The script defaults to Binghamton, NY as the starting location if the 'Starting_City' field is blank or missing.
 
 
 ## Requirements:
@@ -21,7 +21,9 @@ This Python script efficiently calculates distances and travel times between pai
 * `googlemaps` library: `pip install googlemaps`
 * `pandas` library: `pip install pandas`
 * `tqdm` library: `pip install tqdm`
-* `unittest-mock` library (for testing): `pip install unittest-mock`
+* `geopy` library: `pip install geopy`
+* `argparse` library: (included with Python 3.2+)
+* `unittest-mock` library (for testing, optional): `pip install unittest-mock`
 
 
 ## Setup:
@@ -37,20 +39,14 @@ This Python script efficiently calculates distances and travel times between pai
 
 3. **Install Dependencies:**
     ```bash
-    pip install googlemaps pandas tqdm unittest-mock
+    pip install googlemaps pandas tqdm geopy
     ```
 
-4. **Prepare Input Data:** Create an Excel file (e.g., `input_locations.xlsx`) with at least two columns: `"Starting_City"` and `"Destination"`. Each row represents a city pair.  Leaving the `"Starting_City"` column blank will use Binghamton, NY as the origin.
+4. **Prepare Input Data:** Create an Excel file (e.g., `input_locations.xlsx`) with columns: `"trip_info_departure_city"`, `"trip_info_departure_state"`, `"trip_info_destination_city"`, `"trip_info_destination_state"`, `"trip_info_destination_country"`, and `"travel_info_methods_methods"`.
 
 ## Usage:
 
-1. Place the Python script (`distance_calculator.py`), the input Excel file, and the test file (`test_distance_calculator.py` - if you have tests) in the same directory.
-2. Run the script from your terminal: `python distance_calculator.py`
-3. The results will be saved to `distances_output.xlsx`.
-
-## Running Unit Tests:
-
-To run the unit tests (if you've created them in `test_distance_calculator.py`), execute the following command in your terminal:
-
-```bash
-python -m unittest test_distance_calculator.py
+1. Place the Python script (`distance_calculator.py`) and the input Excel file in the same directory.
+2. Run the script from your terminal, providing your API key:
+   ```bash
+   python distance_calculator.py your_api_key [-i input_file.xlsx]
